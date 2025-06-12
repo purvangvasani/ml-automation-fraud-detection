@@ -1,0 +1,10 @@
+node_modules
+__pycache__
+venv
+
+ccapi.js
+data.txt
+package-lock.json
+stsgen2.js
+fraud_model.pkl
+package.json
