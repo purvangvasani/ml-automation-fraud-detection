@@ -146,10 +146,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 import joblib
 
+MONGO_URI = "<<MONGO DB URL>>" # Replace with your MongoDB URI
+client = MongoClient(MONGO_URI)
 
-def fetch_data_from_mongo():
-    MONGO_URI = "<<MONGO DB URL>>"
-    client = MongoClient(MONGO_URI)
+def fetch_data_from_mongo(chunk_size=1000):
     db = client["restaurant"]
     collection = db["orders"]
 
@@ -195,14 +195,24 @@ def fetch_data_from_mongo():
         }
     ]
 
-    result = list(collection.aggregate(pipeline))
-    print(result)
-    if not result:
-        return pd.DataFrame()
+    cursor = collection.aggregate(pipeline, allowDiskUse=True)
+    buffer = []
 
-    df = pd.json_normalize(result)
+    for doc in cursor:
+        buffer.append(doc)
+        if len(buffer) >= chunk_size:
+            # Yield (processed_df, raw_docs) for prediction or update loop
+            yield preprocess_chunk(buffer), buffer
+            buffer = []
 
-    # Safely extract discount_percent from first coupon (if exists)
+    if buffer:
+        # Yield (processed_df, raw_docs) for prediction or update loop
+        yield preprocess_chunk(buffer), buffer
+
+def preprocess_chunk(raw_docs):
+    df = pd.json_normalize(raw_docs)
+
+    # Extract discount_percent from first coupon (if any)
     def extract_discount(row):
         if isinstance(row, list) and len(row) > 0:
             return row[0].get("discount_percent", 0)
@@ -212,7 +222,6 @@ def fetch_data_from_mongo():
     
     # Rename joined fields for easier access
     df = df.rename(columns={
-        # "coupon_info.0.discount_percent": "coupon_discount",
         "user_info.0.name": "user_name",
         "staff_info.0.name": "staff_name",
         "staff_info.0.role": "staff_role"
@@ -235,33 +244,42 @@ def label_fraud(data: pd.DataFrame) -> pd.DataFrame:
 
     return data
 
-
 def train_model_new():
-    data = fetch_data_from_mongo()
+    print("🚀 Starting model training from MongoDB in chunks...")
 
-    if data.empty:
-        print("❌ No data found in MongoDB.")
+    full_data = []
+    for chunk_df, _ in fetch_data_from_mongo(chunk_size=10):
+        if chunk_df.empty:
+            continue
+
+        chunk_df = label_fraud(chunk_df)
+        full_data.append(chunk_df)
+
+    if not full_data:
+        print("❌ No valid data found.")
         return
 
-    data = label_fraud(data)
+    data = pd.concat(full_data, ignore_index=True)
+
+    if data["is_fraud"].sum() == 0:
+        print("⚠️ No fraud samples found in the data. Adjust your rules or check data quality.")
+        return
 
     feature_cols = ["tip", "total_amount", "coupon_discount"]
     target_col = "is_fraud"
 
-    if data[target_col].sum() == 0:
-        print("⚠️ No fraudulent samples found. Check your labeling logic or data.")
-        return
-
     X = data[feature_cols]
     y = data[target_col]
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
 
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model = RandomForestClassifier(n_estimators=100, class_weight="balanced", random_state=42)
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
-    print("✅ Model performance:\n", classification_report(y_test, y_pred))
+    print("✅ Model performance:\n", classification_report(y_test, y_pred, zero_division=1))
 
     joblib.dump(model, "fraud_model.pkl")
     print("✅ Model trained and saved as fraud_model.pkl")

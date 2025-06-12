@@ -3,7 +3,7 @@
 from pymongo import MongoClient
 import os
 
-MONGO_URI = os.getenv("MONGO_URI", "<<MONGO DB URL>>")
+MONGO_URI = os.getenv("MONGO_URI", "<<MONGO DB URL>>") # Replace with your MongoDB URI
 client = MongoClient(MONGO_URI)
 db = client["restaurant"]
 transactions_collection = db["frauddtransactions"]
