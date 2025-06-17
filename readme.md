@@ -5,6 +5,10 @@
 pip install -r requirements
 ```
 
+## To write requirement.txt file with updated packages
+```bash
+pip freeze > requirements. txt
+```
 
 ## Update Mongo DB URL
 Search and replace <<MONGO DB URL>> with your DB-URL
